@@ -24,6 +24,12 @@ import "../libraries/SafeMathLibrary.sol";
 // (c) Atova, Inc.
 // ----------------------------------------------------------------------------
 
+// !!!!!!
+
+    //todo: add Crowdsale
+
+// !!!!!!
+
 contract EarthToken is ERC20, Owned, ProofOfStakeContract {
     using SafeMath for uint;
     using SafeMath for uint128;
@@ -40,11 +46,14 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
     uint public totalSupply;
     uint public totalInitialSupply;
     uint public maxTotalSupply;
+    uint private onePercentOfMaxTotalSupply;
 
+    uint public icoStartTime;
     uint public chainStartTime;
     uint public chainStartBlockNumber;
-
+    
     uint public stakeStartTime;
+    bool private isStakeStartTimeSet;
     uint public stakeMinimumAge;
     uint public annualInterestYield;
 
@@ -53,7 +62,9 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         uint64 time;
     }
 
-    mapping(address => uint) userBalances;
+    mapping(address => uint) founderBalances;
+    mapping(address => uint) preIcoBalances;
+    mapping(address => uint) regularBalances;
     mapping(address => mapping(address => uint)) allowed;
     mapping(address => TransferIn[]) transferIns;
 
@@ -68,24 +79,26 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         name = "Earth Token";
         symbol = "RTH";
         decimals = 18;
-        version = "0.3";
-         // 1 million
-        totalInitialSupply = uint(1000000).multiply(uint(10).power(decimals));
-        totalSupply = totalInitialSupply;
-         // 10 million
-        maxTotalSupply = uint(10000000).multiply(uint(10).power(decimals));
-
-        chainStartTime = now;
-        chainStartBlockNumber = block.number;
+        version = "0.4";
 
         stakeMinimumAge = 30 days;
 
         // default 10% annual interest yield
         annualInterestYield = uint(10).power(decimals.subtract(1));
+        
+        // 10 trillion (10,000,000,000,000)
+        maxTotalSupply = uint(10000000000000).multiply(uint(10).power(decimals));
+        
+        onePercentOfMaxTotalSupply = maxTotalSupply.divide(100);
 
-        userBalances[owner] = totalSupply;
+        chainStartTime = now;
+        chainStartBlockNumber = block.number;
 
-        Transfer(address(0), owner, totalSupply);
+        founderBalances[this] = onePercentOfMaxTotalSupply;
+        Transfer(address(0), this, onePercentOfMaxTotalSupply);
+
+        preIcoBalances[this] = onePercentOfMaxTotalSupply;
+        Transfer(address(0), this, onePercentOfMaxTotalSupply);
     }
 
     function name() public constant returns (string) {
@@ -109,7 +122,7 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
     }
 
     function balanceOf(address holder) public constant returns (uint) {
-        return userBalances[holder];
+        return regularBalances[holder];
     }
 
     function allowance(address approver, address approvee) public constant returns (uint) {
@@ -130,8 +143,8 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         if (msg.sender == to) 
             return mint();
         
-        userBalances[msg.sender] = userBalances[msg.sender].subtract(amount);
-        userBalances[to] = userBalances[to].add(amount);
+        regularBalances[msg.sender] = regularBalances[msg.sender].subtract(amount);
+        regularBalances[to] = regularBalances[to].add(amount);
 
         Transfer(msg.sender, to, amount);
 
@@ -139,7 +152,7 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
             delete transferIns[msg.sender];
 
         var time = uint64(now);
-        transferIns[msg.sender].push(TransferIn(uint128(userBalances[msg.sender]), time));
+        transferIns[msg.sender].push(TransferIn(uint128(regularBalances[msg.sender]), time));
         transferIns[to].push(TransferIn(uint128(amount), time));
 
         return true;
@@ -148,8 +161,8 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
     function transferFrom(address from, address to, uint amount) onlyPayloadSize(3 * 32) public returns (bool) {
         require(to != address(0));
 
-        userBalances[from] = userBalances[from].subtract(amount);
-        userBalances[to] = userBalances[to].add(amount);
+        regularBalances[from] = regularBalances[from].subtract(amount);
+        regularBalances[to] = regularBalances[to].add(amount);
 
         allowed[from][msg.sender] = allowed[from][msg.sender].subtract(amount);
 
@@ -159,14 +172,15 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
             delete transferIns[from];
 
         var time = uint64(now);
-        transferIns[from].push(TransferIn(uint128(userBalances[from]), time));
+        transferIns[from].push(TransferIn(uint128(regularBalances[from]), time));
         transferIns[to].push(TransferIn(uint128(amount), time));
         
         return true;
     }
 
+// 
     function mint() canMintProofOfStake public returns (bool) {
-        if (userBalances[msg.sender] <= 0) 
+        if (regularBalances[msg.sender] <= 0) 
             return false;
 
         if (transferIns[msg.sender].length <= 0) 
@@ -177,13 +191,20 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         if (reward <= 0) 
             return false;
 
+// !!!!!!!!
+
+        // todo: take from regularBalances[this] (instead of minting more) while regularBalances[this] has any money
+        // we should only mint the annual 1%, and rewards are first come first served while regularBalances[this] has anything available???
+
+// !!!!!!!!
+
         totalSupply = totalSupply.add(reward);
 
-        userBalances[msg.sender] = userBalances[msg.sender].add(reward);
+        regularBalances[msg.sender] = regularBalances[msg.sender].add(reward);
 
         delete transferIns[msg.sender];
 
-        transferIns[msg.sender].push(TransferIn(uint128(userBalances[msg.sender]), uint64(now)));
+        transferIns[msg.sender].push(TransferIn(uint128(regularBalances[msg.sender]), uint64(now)));
 
         Mint(msg.sender, reward);
         
@@ -241,17 +262,76 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         require((stakeStartTime <= 0) && (timestamp >= chainStartTime));
 
         stakeStartTime = timestamp;
+        
+        regularBalances[this] = onePercentOfMaxTotalSupply;
+        Transfer(address(0), this, onePercentOfMaxTotalSupply);
+
+        totalInitialSupply = onePercentOfMaxTotalSupply;
+        totalSupply = onePercentOfMaxTotalSupply;
     }
+
+    /* @dev allows owner can set founders  */
+    function ownerSetFounders(address[] founders, uint[] percent) public onlyOwnerAllowed {
+        require(founderBalances[this] > 0);
+        
+        uint totalPercent = 0;
+        for (uint iPercent = 0; iPercent < percent.length; iPercent++) {
+            totalPercent += percent[iPercent];
+        }
+        require(totalPercent == 100);
+
+        var availableBalance = founderBalances[this];
+
+        for (uint iFounders = 0; iFounders < founders.length; iFounders++) {
+            var amount = availableBalance.divide(uint(100).divide(percent[iFounders]));
+
+            founderBalances[founders[iFounders]] = amount;
+            founderBalances[this] -= amount;
+
+            Transfer(this, founders[iFounders], amount);
+        }
+
+        if (founderBalances[this] != 0) {
+            founderBalances[owner] += founderBalances[this];
+
+            // todo: do this at specified time intervals, timed release 25% each quarter for a year, with a start date of ICO date)
+            // Transfer(this, owner, amount);
+        }
+
+        founderBalances[this] = 0;
+    }
+
+    function ownerAddPreIcoHolder(address preIcoHolder, uint amount)  onlyPayloadSize(2 * 32) public onlyOwnerAllowed returns (bool) {
+        require(preIcoBalances[this] > amount);
+
+        preIcoBalances[preIcoHolder] = amount;
+        preIcoBalances[this] -= amount;
+
+        // todo: do this at specified time intervals, timed release (50% each 30 days and 60 days from ICO date)
+        // Transfer(this, founders[iFounders], amount);
+    }
+
+
+// !!!!!!!!!!!!!!!!!!!!!!!
+
+    // todo: do the timed releases of:
+    // founders: 1% founders tokens timed release 25% each quarter for a year, with a start date TBD (start time = ico date)
+    // preIco: 1% pre-ico token timed release (50% each 30 days and 60 days from ICO)
+    // annual 1 % until we hit maxTotalSupply
+
+// !!!!!!!!!!!!!!!!!!!!!!!
+
+
 
     /* @dev allow owner to burn a certain amount of token */
     function ownerBurnToken(uint amount) public onlyOwnerAllowed {
         require(amount > 0);
 
-        userBalances[msg.sender] = userBalances[msg.sender].subtract(amount);
+        regularBalances[msg.sender] = regularBalances[msg.sender].subtract(amount);
         
         delete transferIns[msg.sender];
         
-        transferIns[msg.sender].push(TransferIn(uint128(userBalances[msg.sender]), uint64(now)));
+        transferIns[msg.sender].push(TransferIn(uint128(regularBalances[msg.sender]), uint64(now)));
 
         totalSupply = totalSupply.subtract(amount);
 
@@ -269,25 +349,25 @@ contract EarthToken is ERC20, Owned, ProofOfStakeContract {
         for (uint i = 0; i < amounts.length; i++) {
             total = total.add(amounts[i]);
         }
-        require(total <= userBalances[msg.sender]);
+        require(total <= regularBalances[msg.sender]);
 
         uint64 time = uint64(now);
 
         for (uint j = 0; j < recipients.length; j++) {
-            userBalances[recipients[j]] = userBalances[recipients[j]].add(amounts[j]);
+            regularBalances[recipients[j]] = regularBalances[recipients[j]].add(amounts[j]);
 
             transferIns[recipients[j]].push(TransferIn(uint128(amounts[j]), time));
             
             Transfer(msg.sender, recipients[j], amounts[j]);
         }
 
-        userBalances[msg.sender] = userBalances[msg.sender].subtract(total);
+        regularBalances[msg.sender] = regularBalances[msg.sender].subtract(total);
 
         if (transferIns[msg.sender].length > 0) 
             delete transferIns[msg.sender];
 
-        if (userBalances[msg.sender] > 0) 
-            transferIns[msg.sender].push(TransferIn(uint128(userBalances[msg.sender]), time));
+        if (regularBalances[msg.sender] > 0) 
+            transferIns[msg.sender].push(TransferIn(uint128(regularBalances[msg.sender]), time));
 
         return true;
     }
